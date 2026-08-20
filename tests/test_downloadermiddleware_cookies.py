@@ -710,6 +710,21 @@ class TestCookiesMiddleware:
             cookies2=True,
         )
 
+    def test_user_set_cookie_domain_unrelated(self):
+        """Regression test for #2 / scrapy/scrapy#5841: a cookie set on a
+        Request for a domain unrelated to (i.e. not a suffix of, and not
+        itself a suffix of) the request's own domain must not be sent on
+        that request, but must still be added to the cookie jar so that a
+        later request to the cookie's domain (e.g. after a redirect)
+        includes it."""
+        self._test_user_set_cookie_domain_followup(
+            "https://a.example",
+            "https://b.example",
+            "b.example",
+            cookies1=False,
+            cookies2=True,
+        )
+
     def _test_server_set_cookie_domain_followup(
         self,
         url1: str,
@@ -770,6 +785,17 @@ class TestCookiesMiddleware:
             "https://co.uk",
             "co.uk",
             cookies=True,
+        )
+
+    def test_server_set_cookie_domain_unrelated(self):
+        """A Set-Cookie response header must never be able to set a cookie
+        for a domain unrelated to the response's own domain: unlike
+        request-set cookies, this must remain blocked for security reasons."""
+        self._test_server_set_cookie_domain_followup(
+            "https://a.example",
+            "https://b.example",
+            "b.example",
+            cookies=False,
         )
 
     def _test_cookie_redirect_scheme_change(
