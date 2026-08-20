@@ -56,7 +56,12 @@ class CookiesMiddleware:
         return o
 
     def _process_cookies(
-        self, cookies: Iterable[Cookie], *, jar: CookieJar, request: Request
+        self,
+        cookies: Iterable[Cookie],
+        *,
+        jar: CookieJar,
+        request: Request,
+        require_domain_match: bool = True,
     ) -> None:
         for cookie in cookies:
             cookie_domain = cookie.domain
@@ -71,7 +76,18 @@ class CookiesMiddleware:
                     continue
                 cookie.domain = request_domain
 
-            jar.set_cookie_if_ok(cookie, request)
+            if require_domain_match:
+                jar.set_cookie_if_ok(cookie, request)
+            else:
+                # Cookies explicitly set on a Request (as opposed to
+                # cookies received through a Set-Cookie response header)
+                # may target a domain other than the request's own, e.g.
+                # to have the cookie ready for a redirect to that domain.
+                # We still want them in the cookie jar even if they do
+                # not match the request domain, so we skip the
+                # domain-matching policy check that set_cookie_if_ok
+                # would otherwise apply.
+                jar.set_cookie(cookie)
 
     @_warn_spider_arg
     def process_request(
@@ -83,7 +99,9 @@ class CookiesMiddleware:
         cookiejarkey = request.meta.get("cookiejar")
         jar = self.jars[cookiejarkey]
         cookies = self._get_request_cookies(jar, request)
-        self._process_cookies(cookies, jar=jar, request=request)
+        self._process_cookies(
+            cookies, jar=jar, request=request, require_domain_match=False
+        )
 
         # set Cookie header
         request.headers.pop("Cookie", None)
