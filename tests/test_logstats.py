@@ -94,3 +94,26 @@ def test_stats_calculation_no_elapsed_time(
     logstats.spider_closed(crawler.spider, "test reason")
     assert stats.get_value("responses_per_minute") is None
     assert stats.get_value("items_per_minute") is None
+
+
+def test_stats_calculation_elapsed_time_over_a_day(
+    crawler: Crawler, stats: StatsCollector
+) -> None:
+    """Regression test for issue #5: timedelta.seconds only returns the
+    remainder within the last day (dropping .days), so crawls running for
+    24h or more used to get their elapsed time miscalculated and their
+    final rates wildly inflated. Uses total_seconds() instead.
+    """
+    logstats = build_from_crawler(LogStats, crawler)
+    stats.set_value("response_received_count", 4440)
+    stats.set_value("item_scraped_count", 2960)
+
+    # 1 day and 40 minutes elapsed (88800 seconds).
+    # timedelta.seconds would report only the last 40 minutes (2400s),
+    # giving mins_elapsed=40.0 instead of the correct 1480.0.
+    stats.set_value("start_time", datetime.fromtimestamp(1655100172))
+    stats.set_value("finish_time", datetime.fromtimestamp(1655100172 + 88800))
+    assert crawler.spider
+    logstats.spider_closed(crawler.spider, "test reason")
+    assert stats.get_value("responses_per_minute") == 3.0
+    assert stats.get_value("items_per_minute") == 2.0
