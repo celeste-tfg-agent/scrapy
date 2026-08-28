@@ -94,3 +94,21 @@ def test_stats_calculation_no_elapsed_time(
     logstats.spider_closed(crawler.spider, "test reason")
     assert stats.get_value("responses_per_minute") is None
     assert stats.get_value("items_per_minute") is None
+
+
+def test_stats_calculation_elapsed_time_over_a_day(
+    crawler: Crawler, stats: StatsCollector
+) -> None:
+    """timedelta.seconds ignores .days, so a crawl lasting 24h or more
+    must still be measured using the full elapsed duration.
+    """
+    logstats = build_from_crawler(LogStats, crawler)
+    stats.set_value("response_received_count", 4440)
+    stats.set_value("item_scraped_count", 2960)
+    # 1 day and 40 minutes elapsed (88800 seconds)
+    stats.set_value("start_time", datetime.fromtimestamp(1655100172))
+    stats.set_value("finish_time", datetime.fromtimestamp(1655100172 + 88800))
+    assert crawler.spider
+    logstats.spider_closed(crawler.spider, "test reason")
+    assert stats.get_value("responses_per_minute") == 3.0
+    assert stats.get_value("items_per_minute") == 2.0
