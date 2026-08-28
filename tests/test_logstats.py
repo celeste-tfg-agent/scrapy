@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -94,3 +94,22 @@ def test_stats_calculation_no_elapsed_time(
     logstats.spider_closed(crawler.spider, "test reason")
     assert stats.get_value("responses_per_minute") is None
     assert stats.get_value("items_per_minute") is None
+
+
+def test_stats_calculation_elapsed_time_over_a_day(
+    crawler: Crawler, stats: StatsCollector
+) -> None:
+    """Elapsed time spanning 24h+ must use the full timedelta duration
+    (via total_seconds()), not just timedelta.seconds which discards
+    the .days component and understates the elapsed time.
+    """
+    logstats = build_from_crawler(LogStats, crawler)
+    stats.set_value("item_scraped_count", 2960)
+    stats.set_value("response_received_count", 4440)
+    start_time = datetime.fromtimestamp(1655100172)
+    stats.set_value("start_time", start_time)
+    stats.set_value("finish_time", start_time + timedelta(seconds=88800))
+    assert crawler.spider
+    logstats.spider_closed(crawler.spider, "test reason")
+    assert stats.get_value("responses_per_minute") == 3.0
+    assert stats.get_value("items_per_minute") == 2.0
