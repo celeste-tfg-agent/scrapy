@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import sys
+from ipaddress import IPv4Address
+from socket import gethostbyname
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import pytest
+from cryptography.x509 import load_der_x509_certificate
+from twisted.internet.ssl import Certificate
 
 from scrapy import Spider
 from scrapy.core.downloader.handlers.http11 import HTTP11DownloadHandler
 from scrapy.crawler import Crawler
 from scrapy.exceptions import NotConfigured
 from scrapy.utils.misc import build_from_crawler
+from scrapy.utils.test import get_crawler
+from tests.spiders import SingleRequestSpider
 from tests.utils.bases.download_handlers_http import (
     TestHttpBase,
     TestHttpProxyBase,
@@ -26,9 +33,11 @@ from tests.utils.bases.download_handlers_http import (
     TestRealWebsiteBase,
     TestSimpleHttpsBase,
 )
+from tests.utils.decorators import coroutine_test
 
 if TYPE_CHECKING:
     from scrapy.core.downloader.handlers import DownloadHandlerProtocol
+    from tests.mockserver.http import MockServer
 
 
 pytestmark = pytest.mark.requires_reactor  # HTTP11DownloadHandler requires a reactor
@@ -90,7 +99,59 @@ class TestHttpsTLSVersion(HTTP11DownloadHandlerMixin, TestHttpsTLSVersionBase):
 
 
 class TestHttpWithCrawler(HTTP11DownloadHandlerMixin, TestHttpWithCrawlerBase):
-    pass
+    # --- Regression tests for the empty-body TLS/IP info bug -------------
+    #
+    # HTTP11DownloadHandler._cb_bodyready() takes a shortcut for responses
+    # whose body is empty (Content-Length: 0), because calling
+    # txresponse.deliverBody() hangs when there is no body data to deliver.
+    # That shortcut used to skip _ResponseReader entirely, which is where
+    # response.certificate and response.ip_address are normally captured
+    # (in its connectionMade() callback). As a result, both attributes were
+    # always None for responses with an empty body -- e.g. 204 No Content,
+    # HEAD requests, or bodyless redirects -- even over HTTPS.
+    #
+    # /status?n=204 on the mock server returns an empty body with
+    # Content-Length: 0, so it exercises exactly that shortcut.
+
+    @pytest.mark.filterwarnings(
+        r"ignore:.*You should use cryptography's X\.509 APIs:DeprecationWarning"
+    )
+    @coroutine_test
+    async def test_response_ssl_certificate_empty_body(
+        self, mockserver: MockServer
+    ) -> None:
+        if not self.is_secure:
+            pytest.skip("Only applies to HTTPS")
+        crawler = get_crawler(SingleRequestSpider, self.settings_dict)
+        url = mockserver.url("/status?n=204", is_secure=self.is_secure)
+        await crawler.crawl_async(seed=url, mockserver=mockserver)
+        assert isinstance(crawler.spider, SingleRequestSpider)
+        response = crawler.spider.meta["responses"][0]
+        assert response.body == b""
+        cert = response.certificate
+        assert cert is not None
+        if isinstance(cert, Certificate):  # Twisted
+            assert cert.getSubject().commonName == b"localhost"
+            assert cert.getIssuer().commonName == b"localhost"
+        elif isinstance(cert, bytes):  # DER bytes
+            cert_x509 = load_der_x509_certificate(cert)
+            assert cert_x509.subject.rfc4514_string() == "CN=localhost,O=Scrapy,C=IE"
+            assert cert_x509.issuer.rfc4514_string() == "CN=localhost,O=Scrapy,C=IE"
+
+    @coroutine_test
+    async def test_response_ip_address_empty_body(
+        self, mockserver: MockServer
+    ) -> None:
+        crawler = get_crawler(SingleRequestSpider, self.settings_dict)
+        url = mockserver.url("/status?n=204", is_secure=self.is_secure)
+        expected_netloc, _ = urlparse(url).netloc.split(":")
+        await crawler.crawl_async(seed=url, mockserver=mockserver)
+        assert isinstance(crawler.spider, SingleRequestSpider)
+        response = crawler.spider.meta["responses"][0]
+        assert response.body == b""
+        ip_address = response.ip_address
+        assert isinstance(ip_address, IPv4Address)
+        assert str(ip_address) == gethostbyname(expected_netloc)
 
 
 class TestHttpsWithCrawler(TestHttpWithCrawler):
