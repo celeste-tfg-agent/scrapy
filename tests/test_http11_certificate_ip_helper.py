@@ -22,6 +22,7 @@ import datetime
 from ipaddress import ip_address
 from unittest.mock import Mock
 
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -82,6 +83,9 @@ def _mock_transport(*, with_certificate: bool, host: str) -> Mock:
     return transport
 
 
+@pytest.mark.filterwarnings(
+    r"ignore:.*You should use cryptography's X\.509 APIs:DeprecationWarning"
+)
 def test_https_transport_returns_certificate_and_ip_address() -> None:
     transport = _mock_transport(with_certificate=True, host="127.0.0.1")
 
