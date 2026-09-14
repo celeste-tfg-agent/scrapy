@@ -18,9 +18,14 @@ the fix end-to-end through a real crawl over HTTP/HTTPS).
 
 from __future__ import annotations
 
+import datetime
 from ipaddress import ip_address
 from unittest.mock import Mock
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from OpenSSL import crypto
 from twisted.internet.ssl import Certificate
 
@@ -29,18 +34,28 @@ from scrapy.core.downloader.handlers.http11 import _get_certificate_and_ip_addre
 
 def _self_signed_cert(common_name: str = "localhost") -> crypto.X509:
     """Build a throwaway self-signed certificate, mirroring what
-    getPeerCertificate() returns on a real TLS connection."""
-    key = crypto.PKey()
-    key.generate_key(crypto.TYPE_RSA, 2048)
-    cert = crypto.X509()
-    cert.get_subject().CN = common_name
-    cert.set_serial_number(1)
-    cert.gmtime_adj_notBefore(0)
-    cert.gmtime_adj_notAfter(3600)
-    cert.set_issuer(cert.get_subject())
-    cert.set_pubkey(key)
-    cert.sign(key, "sha256")
-    return cert
+    getPeerCertificate() returns on a real TLS connection.
+
+    Built with the ``cryptography`` APIs (rather than pyOpenSSL's own, now
+    deprecated, key-generation/signing calls) and then wrapped as an
+    ``OpenSSL.crypto.X509`` object, which is what ``ssl.Certificate()``
+    expects.
+    """
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .sign(key, hashes.SHA256())
+    )
+    der_bytes = cert.public_bytes(serialization.Encoding.DER)
+    return crypto.load_certificate(crypto.FILETYPE_ASN1, der_bytes)
 
 
 def _mock_transport(*, with_certificate: bool, host: str) -> Mock:
