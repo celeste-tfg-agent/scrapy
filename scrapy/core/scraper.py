@@ -4,6 +4,7 @@ extracts information from them"""
 from __future__ import annotations
 
 import logging
+import pdb
 import warnings
 from collections import deque
 from collections.abc import AsyncIterator
@@ -379,6 +380,15 @@ class Scraper:
         stats = self.crawler.stats
         stats.inc_value("spider_exceptions/count")
         stats.inc_value(f"spider_exceptions/{_failure.value.__class__.__name__}")
+        if self.crawler.settings.getbool("PDB_ON_SPIDER_ERROR"):
+            # This is the single place where a Failure becomes a real,
+            # user-visible spider error (it has just been logged above and
+            # signals.spider_error has just been sent). Failures that Scrapy
+            # or Twisted build and recover from internally never reach this
+            # point, so entering pdb here (instead of via Twisted's global
+            # failure.startDebugMode()) keeps --pdb from firing on internal,
+            # non-error control flow. See issue #15.
+            pdb.post_mortem(_failure.getTracebackObject())
 
     def handle_spider_output(
         self,
