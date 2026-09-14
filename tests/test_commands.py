@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -176,6 +177,72 @@ class MySpider(scrapy.Spider):
         returncode, _, err = proc("runspider", str(spider_path), "--pdb")
         assert returncode == 0, err
         assert "It works!" in err
+
+
+class TestPdbOnSpiderError:
+    """Regression tests for issue #15.
+
+    Before the fix, ``--pdb`` called ``twisted.python.failure.startDebugMode()``,
+    which is a *global* switch: every single ``twisted.python.failure.Failure``
+    built anywhere in the process (including ones Twisted/Scrapy construct and
+    recover from internally, such as :class:`~scrapy.exceptions.CloseSpider`
+    raised from a callback, which is normal control flow and never becomes a
+    user-visible error) would drop into pdb the moment it was created. These
+    tests check that pdb is entered only for a real, user-reported spider
+    error (an unhandled exception, logged as "Spider error processing"), and
+    not for CloseSpider.
+
+    Stdin is closed (``subprocess.DEVNULL``) so that, if pdb is entered, it
+    immediately receives EOF and exits instead of hanging the test.
+    """
+
+    real_error_spider_code = """
+import scrapy
+
+class MySpider(scrapy.Spider):
+    name = "myspider"
+    start_urls = ["data:,"]
+
+    def parse(self, response):
+        raise ValueError("boom")
+"""
+
+    close_spider_code = """
+import scrapy
+from scrapy.exceptions import CloseSpider
+
+class MySpider(scrapy.Spider):
+    name = "myspider"
+    start_urls = ["data:,"]
+
+    def parse(self, response):
+        raise CloseSpider("done")
+"""
+
+    @staticmethod
+    def _write_spider(tmp_path: Path, code: str) -> Path:
+        path = tmp_path / "myspider.py"
+        path.write_text(code, encoding="utf-8")
+        return path
+
+    def test_pdb_enters_debugger_on_real_spider_error(self, tmp_path: Path) -> None:
+        spider_path = self._write_spider(tmp_path, self.real_error_spider_code)
+        returncode, out, err = proc(
+            "runspider", str(spider_path), "--pdb", stdin=subprocess.DEVNULL
+        )
+        assert "Spider error processing" in err
+        assert "ValueError" in err
+        assert "(Pdb)" in out
+
+    def test_pdb_not_triggered_by_closespider(self, tmp_path: Path) -> None:
+        spider_path = self._write_spider(tmp_path, self.close_spider_code)
+        returncode, out, err = proc(
+            "runspider", str(spider_path), "--pdb", stdin=subprocess.DEVNULL
+        )
+        assert returncode == 0, err
+        assert "Closing spider (done)" in err
+        assert "Spider error processing" not in err
+        assert "(Pdb)" not in out
 
 
 class TestSettingsCommand:
