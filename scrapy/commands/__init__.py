@@ -13,8 +13,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from twisted.python import failure
-
 from scrapy import signals
 from scrapy.exceptions import ScrapyDeprecationWarning, UsageError
 from scrapy.extensions.feedexport import FeedExporter
@@ -154,7 +152,25 @@ class ScrapyCommand(ABC):
             )
 
         if opts.pdb:
-            failure.startDebugMode()
+            # NOTE: We deliberately do NOT call
+            # twisted.python.failure.startDebugMode() here. That function
+            # flips a *global* switch that makes pdb.post_mortem() run for
+            # every single twisted.python.failure.Failure ever constructed,
+            # anywhere in the process, the moment it is created - including
+            # the many Failures Twisted and Scrapy build internally as a
+            # control-flow/error-recovery mechanism and then handle/recover
+            # from without the user ever seeing them as an error. That made
+            # --pdb drop into the debugger constantly on real crawls, for
+            # things that were never actual bugs.
+            #
+            # Instead, we only record that pdb should be used, via a
+            # setting. The actual decision of *when* to enter pdb is made in
+            # Scraper.handle_spider_error() (scrapy/core/scraper.py), which
+            # is the single place where an exception becomes a real,
+            # user-visible "Spider error processing" report (i.e. it wasn't
+            # silently handled/recovered by some other part of the
+            # framework). That keeps --pdb targeted at actual spider bugs.
+            self.settings.set("PDB_ON_SPIDER_ERROR", True, priority="cmdline")
 
     @abstractmethod
     def run(self, args: list[str], opts: argparse.Namespace) -> None:
