@@ -90,6 +90,34 @@ class _ResultT(TypedDict):
     stop_download: NotRequired[StopDownload | None]
 
 
+def _get_certificate_and_ip_address(
+    transport: Any,
+) -> tuple[
+    ssl.Certificate | None, ipaddress.IPv4Address | ipaddress.IPv6Address | None
+]:
+    """Extract the peer TLS certificate (if any) and the peer IP address
+    from a Twisted HTTP/1.1 client transport (or its proxy, such as the
+    ``txresponse._transport`` object exposed by ``twisted.web._newclient``).
+
+    This logic is shared by :meth:`_ResponseReader.connectionMade`, which
+    runs once Twisted starts delivering the response body via
+    ``txresponse.deliverBody()``, and by
+    :meth:`_ScrapyAgent._cb_bodyready`, which needs the same information for
+    responses with an empty body, where ``deliverBody()`` (and hence
+    ``connectionMade()``) is never called because Twisted would hang
+    waiting for body data that never arrives.
+    """
+    certificate = None
+    with suppress(AttributeError):
+        certificate = ssl.Certificate(transport._producer.getPeerCertificate())
+
+    ip_address = None
+    with suppress(AttributeError):
+        ip_address = ipaddress.ip_address(transport._producer.getPeer().host)
+
+    return certificate, ip_address
+
+
 class HTTP11DownloadHandler(BaseHttpDownloadHandler):
     def __init__(self, crawler: Crawler):
         if not crawler.settings.getbool("TWISTED_REACTOR_ENABLED"):
@@ -532,8 +560,21 @@ class _ScrapyAgent:
 
         # deliverBody hangs for responses without body
         if cast("int", txresponse.length) == 0:
+            # deliverBody() is never called for these responses, so
+            # _ResponseReader.connectionMade() (which is where the TLS
+            # certificate and the peer IP address are normally captured)
+            # never runs either. Extract that same information directly
+            # from the response transport instead, so that
+            # response.certificate/response.ip_address are populated even
+            # when the response body is empty (e.g. 204 No Content, HEAD
+            # requests, bodyless redirects).
+            certificate, ip_address = _get_certificate_and_ip_address(
+                txresponse._transport
+            )
             return {
                 "txresponse": txresponse,
+                "certificate": certificate,
+                "ip_address": ip_address,
             }
 
         maxsize = request.meta.get("download_maxsize", self._maxsize)
@@ -668,16 +709,12 @@ class _ResponseReader(Protocol):
 
     def connectionMade(self) -> None:
         assert self.transport
-        if self._certificate is None:
-            with suppress(AttributeError):
-                self._certificate = ssl.Certificate(
-                    self.transport._producer.getPeerCertificate()
-                )
-
-        if self._ip_address is None:
-            self._ip_address = ipaddress.ip_address(
-                self.transport._producer.getPeer().host
-            )
+        if self._certificate is None or self._ip_address is None:
+            certificate, ip_address = _get_certificate_and_ip_address(self.transport)
+            if self._certificate is None:
+                self._certificate = certificate
+            if self._ip_address is None:
+                self._ip_address = ip_address
 
         if self._tls_verbose_logging:
             connection = self.transport._producer.getHandle()
