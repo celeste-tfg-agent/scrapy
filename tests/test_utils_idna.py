@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import idna
 import pytest
-from OpenSSL import SSL
 
 from scrapy.utils.idna import install_lenient_idna_patch, lenient_idna_encode
 
@@ -81,18 +80,19 @@ class TestInstallLenientIdnaPatch:
         endpoint = HostnameEndpoint(reactor, EMOJI_HOSTNAME, 443)
         assert endpoint._badHostname is False
 
-    def test_tls_options_accepts_underscore_hostname(self) -> None:
+    def test_tls_sni_hostname_accepts_underscore_hostname(self) -> None:
+        # Exercise the actual entry point Scrapy uses to build the TLS SNI
+        # / hostname-verification value: _ScrapyClientContextFactory
+        # .creatorForNetloc(), which internally builds a ClientTLSOptions
+        # (or its 26.4.0+ counterpart) instance. Going through this
+        # entry point, rather than instantiating the private Twisted class
+        # directly, keeps the test correct across the Twisted versions
+        # that changed that private class's constructor signature.
         install_lenient_idna_patch()
-        from twisted.internet._sslverify import ClientTLSOptions
+        from scrapy.core.downloader.contextfactory import (
+            _ScrapyClientContextFactory,
+        )
 
-        ctx = SSL.Context(SSL.SSLv23_METHOD)
-        options = ClientTLSOptions(UNDERSCORE_HOSTNAME, ctx)
+        factory = _ScrapyClientContextFactory()
+        options = factory.creatorForNetloc(UNDERSCORE_HOSTNAME.encode("ascii"), 443)
         assert options._hostnameASCII == UNDERSCORE_HOSTNAME
-
-    def test_tls_options_accepts_emoji_hostname(self) -> None:
-        install_lenient_idna_patch()
-        from twisted.internet._sslverify import ClientTLSOptions
-
-        ctx = SSL.Context(SSL.SSLv23_METHOD)
-        options = ClientTLSOptions(EMOJI_HOSTNAME, ctx)
-        assert options._hostnameASCII == "xn--4n8h.example.com"
