@@ -581,6 +581,37 @@ class RFC2616PolicyTestMixin(PolicyTestMixin):
                 else:
                     assert "cached" in res5.flags
 
+    def test_freshen_response_on_revalidation(self):
+        # A response successfully revalidated (304) must have its Date
+        # header, and thus its age, refreshed in the cache, so a later
+        # request within the same max-age window is served from cache
+        # instead of triggering yet another revalidation.
+        headers = {
+            "Date": self.yesterday,
+            "Cache-Control": "max-age=60",
+            "Last-Modified": self.yesterday,
+            "Warning": ["110 - old", "214 - keep"],
+        }
+        with self._middleware() as mw:
+            req0 = Request("http://example.com")
+            res0 = Response(req0.url, headers=headers)
+            self._process_requestresponse(mw, req0, res0)
+
+            # The cached response is stale, so the request must be
+            # revalidated with the server.
+            assert mw.process_request(req0) is None
+            res304 = Response(req0.url, status=304, headers={"Date": self.today})
+            res1 = mw.process_response(req0, res304)
+            assert res1.headers["Date"] == self.today.encode()
+            assert res1.headers["Warning"] == b"214 - keep"
+
+            # The freshened response must now be considered fresh again,
+            # without a further round trip to the server.
+            res2 = mw.process_request(req0)
+            assert isinstance(res2, Response)
+            assert "cached" in res2.flags
+            assert res2.headers["Date"] == self.today.encode()
+
     def test_middleware_ignore_schemes(self):
         # file responses are not cached by default
         req = Request("file:///tmp/t.txt")
