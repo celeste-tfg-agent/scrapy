@@ -44,6 +44,15 @@ ScrapeFunc: TypeAlias = Callable[
     Coroutine[Any, Any, Iterable[_T] | AsyncIterator[_T]],
 ]
 
+# Attribute set on an exception once _process_spider_exception() has
+# offered it to every applicable process_spider_exception() method
+# (starting from a given index) and none of them handled it. Any outer
+# _evaluate_iterable() layer that later catches this same exception
+# object (because it is merely propagating, unhandled, through an
+# intervening process_spider_output() method) checks for this attribute
+# so it doesn't process the exception a second time.
+_EXCEPTION_PROCESSED_ATTR = "_spidermw_exception_processed"
+
 
 class SpiderMiddlewareManager(MiddlewareManager):
     component_name = "spider middleware"
@@ -108,6 +117,14 @@ class SpiderMiddlewareManager(MiddlewareManager):
             async for r in iterable:
                 yield r
         except Exception as ex:
+            if getattr(ex, _EXCEPTION_PROCESSED_ATTR, False):
+                # This exception has already been offered to every
+                # applicable process_spider_exception() method by an
+                # earlier (more specific) _evaluate_iterable() layer, and
+                # none of them handled it. It is now simply propagating,
+                # unhandled, through this later process_spider_output()
+                # stage on its way out, so it must not be processed again.
+                raise
             exception_result: MutableAsyncChain[_T] = self._process_spider_exception(
                 response, ex, exception_processor_index
             )
@@ -147,6 +164,11 @@ class SpiderMiddlewareManager(MiddlewareManager):
                 f"or an iterable, got {type(result)}"
             )
             raise _InvalidOutput(msg)
+        # No middleware handled the exception: mark it so that, as it
+        # keeps propagating up through any outer process_spider_output
+        # _evaluate_iterable() wrappers, it isn't offered to
+        # process_spider_exception() methods a second (or third...) time.
+        setattr(exception, _EXCEPTION_PROCESSED_ATTR, True)
         raise exception
 
     def _process_spider_output(
