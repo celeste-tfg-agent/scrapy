@@ -1034,3 +1034,68 @@ class TestCrawlSpider:
             await crawler.crawl_async(seed=mockserver.url("/"), callback_func=cb)
         assert "Closing spider (my_reason)" in caplog.text
         assert "Spider error processing" not in caplog.text
+
+    @coroutine_test
+    async def test_pdb_on_spider_error(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        mockserver: MockServer,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression test for issue #15.
+
+        The PDB_ON_SPIDER_ERROR setting (set by the ``--pdb`` command-line
+        option) must start a pdb session for a real, user-reported spider
+        error: an unhandled exception raised from a spider callback, i.e.
+        exactly the case that gets logged as "Spider error processing".
+        """
+
+        def cb(response: Response) -> Any:
+            raise ValueError("boom")
+
+        post_mortem_calls: list[Any] = []
+        monkeypatch.setattr(
+            "scrapy.core.scraper.pdb.post_mortem",
+            lambda tb=None: post_mortem_calls.append(tb),
+        )
+
+        crawler = get_crawler(SingleRequestSpider, {"PDB_ON_SPIDER_ERROR": True})
+        with caplog.at_level(logging.INFO):
+            await crawler.crawl_async(seed=mockserver.url("/"), callback_func=cb)
+        assert "Spider error processing" in caplog.text
+        assert len(post_mortem_calls) == 1
+
+    @coroutine_test
+    async def test_pdb_not_triggered_by_internal_recovered_failure(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        mockserver: MockServer,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression test for issue #15.
+
+        Before this fix, ``--pdb`` called
+        ``twisted.python.failure.startDebugMode()``, a *global* switch that
+        made pdb start for every ``twisted.python.failure.Failure`` Twisted
+        or Scrapy created anywhere in the process, including internal
+        control-flow exceptions (like :class:`~scrapy.exceptions.CloseSpider`
+        raised from a callback) that the framework recovers from on its own
+        and never reports to the user as a spider error. PDB_ON_SPIDER_ERROR
+        must not start a pdb session in that case.
+        """
+
+        def cb(response: Response) -> Any:
+            raise CloseSpider("my_reason")
+
+        post_mortem_calls: list[Any] = []
+        monkeypatch.setattr(
+            "scrapy.core.scraper.pdb.post_mortem",
+            lambda tb=None: post_mortem_calls.append(tb),
+        )
+
+        crawler = get_crawler(SingleRequestSpider, {"PDB_ON_SPIDER_ERROR": True})
+        with caplog.at_level(logging.INFO):
+            await crawler.crawl_async(seed=mockserver.url("/"), callback_func=cb)
+        assert "Closing spider (my_reason)" in caplog.text
+        assert "Spider error processing" not in caplog.text
+        assert post_mortem_calls == []
