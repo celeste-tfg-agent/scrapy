@@ -18,6 +18,7 @@ from scrapy.utils._download_handlers import (
 )
 from scrapy.utils.defer import maybe_deferred_to_future
 from scrapy.utils.httpobj import urlparse_cached
+from scrapy.utils.idna import install_lenient_idna_patch
 
 if TYPE_CHECKING:
     from twisted.internet.base import DelayedCall
@@ -37,6 +38,12 @@ class H2DownloadHandler(BaseDownloadHandler):
             raise NotConfigured(f"{type(self).__name__} requires a Twisted reactor.")
         super().__init__(crawler)
         self._crawler = crawler
+
+        # See HTTP11DownloadHandler.__init__() for why this is needed: it
+        # makes Twisted accept hostnames with underscores or non-strict-IDNA
+        # Unicode code points (e.g. emoji) for both the TCP connection and
+        # the TLS SNI/hostname-verification value. See GH issue #17.
+        install_lenient_idna_patch()
 
         self._pool = H2ConnectionPool(crawler)
         self._context_factory = _load_context_factory_from_settings(crawler)

@@ -59,6 +59,7 @@ from scrapy.utils._download_handlers import (
 from scrapy.utils.defer import maybe_deferred_to_future
 from scrapy.utils.deprecate import warn_on_deprecated_spider_attribute
 from scrapy.utils.httpobj import urlparse_cached
+from scrapy.utils.idna import install_lenient_idna_patch
 from scrapy.utils.python import to_bytes, to_unicode
 from scrapy.utils.ssl import _log_ssl_conn_debug_info
 from scrapy.utils.url import add_http_if_no_scheme
@@ -96,6 +97,15 @@ class HTTP11DownloadHandler(BaseHttpDownloadHandler):
             raise NotConfigured(f"{type(self).__name__} requires a Twisted reactor.")
         super().__init__(crawler)
         self._crawler = crawler
+
+        # Twisted's own hostname-to-ASCII encoding (used both to resolve
+        # the TCP connection and to set the TLS SNI/hostname-verification
+        # value) is stricter than what DNS and browsers accept in
+        # practice, and rejects otherwise-valid hostnames (e.g. ones with
+        # underscores, or internationalized hostnames using code points
+        # such as emoji). Patch it to be lenient instead. See GH issue
+        # #17.
+        install_lenient_idna_patch()
 
         from twisted.internet import reactor
 
