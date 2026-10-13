@@ -266,6 +266,22 @@ class TestJMESPath:
             r"(\d+)"
         ) == ["18", "32", "22", "25"]
 
+    def test_nested_jmespath_preserves_value_type(self) -> None:
+        """Regression test for https://github.com/scrapy/scrapy/issues/8038:
+        a selector with no response (e.g. a nested one created internally
+        while chaining .jmespath()) had its type forced to "html", which
+        made jmespath coerce non-string JSON values (e.g. booleans) to
+        strings instead of returning them as-is."""
+        sel = Selector(text='{"f": false, "n": 1, "s": "text"}')
+        assert sel.jmespath("f").get() is False
+        assert sel.jmespath("n").get() == 1
+        assert sel.jmespath("s").get() == "text"
+
+        # Also for a selector nested two levels deep, as in the original
+        # report (a jmespath() result chained into another jmespath()).
+        nested = Selector(text='{"outer": {"f": false}}').jmespath("outer")
+        assert nested.jmespath("f").get() is False
+
 
 @pytest.mark.skipif(PARSEL_SUPPORTS_JMESPATH, reason="parsel >= 1.8 supports jmespath")
 def test_jmespath_not_available() -> None:

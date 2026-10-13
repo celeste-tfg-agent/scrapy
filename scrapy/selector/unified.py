@@ -93,7 +93,18 @@ class Selector(_ParselSelector, object_ref):
                 type = "xml"  # noqa: A001
             elif isinstance(response, JsonResponse):
                 type = "json"  # noqa: A001
-            elif response is None or isinstance(response, HtmlResponse):
+            elif isinstance(response, HtmlResponse) or (
+                response is None and text is not None
+            ):
+                # response is None and text is not None: the top-level
+                # Selector(text=...) entry point, which keeps defaulting to
+                # "html" for backwards compatibility. A responseless
+                # selector created with neither (e.g. a nested selector
+                # produced internally by .xpath()/.jmespath() chaining)
+                # keeps type unset instead, so parsel determines it from
+                # the root/body itself; forcing "html" on it was wrong,
+                # e.g. it made nested .jmespath() calls stringify
+                # non-string JSON values such as booleans.
                 type = "html"  # noqa: A001
 
         if text is not None:
