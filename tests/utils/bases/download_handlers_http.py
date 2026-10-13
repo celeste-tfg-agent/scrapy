@@ -258,6 +258,29 @@ class TestHttpBase(ABC):
         assert not extra_headers, body["headers"]
 
     @coroutine_test
+    async def test_explicit_content_length_header_is_not_duplicated(
+        self, mockserver: MockServer
+    ) -> None:
+        """Regression test for
+        https://github.com/scrapy/scrapy/issues/4919: an explicit
+        Content-Length header set by the caller used to end up on the wire
+        alongside the Content-Length the underlying HTTP client already
+        adds from the body length, producing a malformed request with two
+        Content-Length header fields that some servers reject outright."""
+        body = b"hello"
+        request = Request(
+            mockserver.url("/echo", is_secure=self.is_secure),
+            method="POST",
+            headers={"Content-Length": str(len(body))},
+            body=body,
+        )
+        async with self.get_dh() as download_handler:
+            response = await download_handler.download_request(request)
+        assert response.status == HTTPStatus.OK
+        received = json.loads(response.body.decode("utf-8"))
+        assert received["headers"]["Content-Length"] == [str(len(body))]
+
+    @coroutine_test
     async def test_server_receives_correct_request_body(
         self, mockserver: MockServer
     ) -> None:
