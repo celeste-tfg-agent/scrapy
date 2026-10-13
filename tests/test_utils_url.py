@@ -75,6 +75,24 @@ def test_url_is_from_spider_with_allowed_domains():
     assert url_is_from_spider("http://www.example.com/some/page.html", MySpider3)
 
 
+def test_url_is_from_spider_with_allowed_domains_as_property():
+    """Regression test for https://github.com/scrapy/scrapy/issues/3119:
+    url_is_from_spider() is only ever given the spider class, not an
+    instance (e.g. during spider loading, before any spider is
+    instantiated), so an allowed_domains defined as a @property -
+    evaluable only on an instance - must not make it crash."""
+
+    class MySpider(Spider):
+        name = "example.com"
+
+        @property
+        def allowed_domains(self):
+            return ["example.org", "example.net"]
+
+    assert url_is_from_spider("http://www.example.com/some/page.html", MySpider)
+    assert not url_is_from_spider("http://www.example.org/some/page.html", MySpider)
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
