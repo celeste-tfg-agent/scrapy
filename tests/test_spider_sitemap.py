@@ -152,6 +152,38 @@ Sitemap: /sitemap-relative-url.xml
             "http://www.example.com/italiano/",
         ]
 
+    def test_urlset_loc_scheme_relative(self):
+        """Regression test for https://github.com/scrapy/scrapy/issues/965:
+        a <loc> starting with "//" (scheme-relative) was passed on as-is to
+        Request(), which rejects it outright for having no scheme. It must
+        instead be resolved against the sitemap's own URL, like any other
+        relative loc."""
+        sitemap = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+        <url>
+            <loc>//www.example.com/english/</loc>
+        </url>
+    </urlset>"""
+        r = TextResponse(url="https://www.example.com/sitemap.xml", body=sitemap)
+        spider = self.spider_class("example.com")
+        assert [req.url for req in spider._parse_sitemap(r)] == [
+            "https://www.example.com/english/"
+        ]
+
+    def test_sitemapindex_loc_scheme_relative(self):
+        """Same as test_urlset_loc_scheme_relative, for a sitemap index."""
+        sitemap = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+        <sitemap>
+            <loc>//www.example.com/sitemap1.xml</loc>
+        </sitemap>
+    </sitemapindex>"""
+        r = TextResponse(url="https://www.example.com/sitemap.xml", body=sitemap)
+        spider = self.spider_class("example.com")
+        assert [req.url for req in spider._parse_sitemap(r)] == [
+            "https://www.example.com/sitemap1.xml"
+        ]
+
     def test_sitemap_filter(self):
         sitemap = b"""<?xml version="1.0" encoding="UTF-8"?>
     <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
