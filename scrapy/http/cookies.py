@@ -104,8 +104,25 @@ class CookieJar:
     def set_cookie(self, cookie: Cookie) -> None:
         self.jar.set_cookie(cookie)
 
-    def set_cookie_if_ok(self, cookie: Cookie, request: Request) -> None:
-        self.jar.set_cookie_if_ok(cookie, WrappedRequest(request))  # type: ignore[arg-type]
+    def set_cookie_if_ok(
+        self, cookie: Cookie, request: Request, *, require_domain_match: bool = True
+    ) -> None:
+        """Store *cookie* in the jar if the configured policy allows it.
+
+        If *require_domain_match* is False, the domain-matching rules that
+        :class:`~http.cookiejar.CookiePolicy` applies (i.e. whether the
+        cookie domain matches the request host) are skipped and the cookie
+        is stored unconditionally. This is used for cookies explicitly
+        provided by request code (e.g. ``Request(cookies=...)``), so that a
+        cookie set for a domain other than the request's can still reach
+        that other domain later on (e.g. via a redirect), while cookies
+        received through the ``Set-Cookie`` response header keep being
+        subject to the usual domain restrictions for security reasons.
+        """
+        if require_domain_match:
+            self.jar.set_cookie_if_ok(cookie, WrappedRequest(request))  # type: ignore[arg-type]
+        else:
+            self.jar.set_cookie(cookie)
 
 
 def potential_domain_matches(domain: str) -> list[str]:

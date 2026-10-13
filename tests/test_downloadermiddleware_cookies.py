@@ -710,6 +710,22 @@ class TestCookiesMiddleware:
             cookies2=True,
         )
 
+    def test_user_set_cookie_domain_unrelated(self):
+        """Setting a cookie for a domain unrelated to the request's own
+        domain must not add it to that request's Cookie header, but it
+        must still reach the cookie jar, so that it can be sent to that
+        other domain later on (e.g. after a redirect).
+
+        https://github.com/scrapy/scrapy/issues/5841
+        """
+        self._test_user_set_cookie_domain_followup(
+            "https://toscrape.com",
+            "https://example.com",
+            "example.com",
+            cookies1=False,
+            cookies2=True,
+        )
+
     def _test_server_set_cookie_domain_followup(
         self,
         url1: str,
@@ -770,6 +786,22 @@ class TestCookiesMiddleware:
             "https://co.uk",
             "co.uk",
             cookies=True,
+        )
+
+    def test_server_set_cookie_domain_unrelated(self):
+        """A server must not be able to set a cookie for a domain
+        unrelated to the response's own domain via the Set-Cookie
+        header: relaxing domain filtering for the jar only applies to
+        cookies set explicitly on the request, not to cookies received
+        from a response.
+
+        https://github.com/scrapy/scrapy/issues/5841
+        """
+        self._test_server_set_cookie_domain_followup(
+            "https://toscrape.com",
+            "https://example.com",
+            "example.com",
+            cookies=False,
         )
 
     def _test_cookie_redirect_scheme_change(

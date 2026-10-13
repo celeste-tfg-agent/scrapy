@@ -56,7 +56,12 @@ class CookiesMiddleware:
         return o
 
     def _process_cookies(
-        self, cookies: Iterable[Cookie], *, jar: CookieJar, request: Request
+        self,
+        cookies: Iterable[Cookie],
+        *,
+        jar: CookieJar,
+        request: Request,
+        require_domain_match: bool = True,
     ) -> None:
         for cookie in cookies:
             cookie_domain = cookie.domain
@@ -71,7 +76,9 @@ class CookiesMiddleware:
                     continue
                 cookie.domain = request_domain
 
-            jar.set_cookie_if_ok(cookie, request)
+            jar.set_cookie_if_ok(
+                cookie, request, require_domain_match=require_domain_match
+            )
 
     @_warn_spider_arg
     def process_request(
@@ -83,7 +90,13 @@ class CookiesMiddleware:
         cookiejarkey = request.meta.get("cookiejar")
         jar = self.jars[cookiejarkey]
         cookies = self._get_request_cookies(jar, request)
-        self._process_cookies(cookies, jar=jar, request=request)
+        # Cookies defined on the request itself are trusted code from the
+        # spider, so a domain other than the request's should not keep them
+        # out of the jar: it should only keep them out of this request's
+        # Cookie header (already handled by CookieJar.add_cookie_header).
+        self._process_cookies(
+            cookies, jar=jar, request=request, require_domain_match=False
+        )
 
         # set Cookie header
         request.headers.pop("Cookie", None)
@@ -102,6 +115,9 @@ class CookiesMiddleware:
         cookiejarkey = request.meta.get("cookiejar")
         jar = self.jars[cookiejarkey]
         cookies = jar.make_cookies(response, request)
+        # Cookies coming from a Set-Cookie response header must keep being
+        # restricted to the response's own domain: allowing a server to set
+        # cookies for other domains would be a security issue.
         self._process_cookies(cookies, jar=jar, request=request)
 
         self._debug_set_cookie(response)
