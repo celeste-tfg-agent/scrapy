@@ -65,9 +65,22 @@ def _parse_headers_and_cookies(
     headers: list[tuple[str, bytes]] = []
     cookies: dict[str, str] = {}
     for header in parsed_args.headers or ():
-        name, val = header.split(":", 1)
-        name = name.strip()
-        val = val.strip()
+        if ":" in header:
+            name, val = header.split(":", 1)
+            name = name.strip()
+            val = val.strip()
+        elif header.endswith(";") and header[:-1].strip():
+            # curl's syntax for sending a header with an empty value, e.g.
+            # -H "X-Flag;" puts "X-Flag:" on the wire.
+            name = header[:-1].strip()
+            val = ""
+        else:
+            # Every other case without a colon (a bare name, a name
+            # followed by anything other than a lone trailing ";", or a
+            # lone ";") is not valid curl header syntax; curl silently
+            # omits the header entirely instead of sending it, so we do
+            # the same instead of crashing.
+            continue
         if name.title() == "Cookie":
             for name, morsel in SimpleCookie(val).items():
                 cookies[name] = morsel.value
@@ -83,7 +96,10 @@ def _parse_headers_and_cookies(
             cookies[name] = morsel.value
 
     if parsed_args.auth:
-        user, password = parsed_args.auth.split(":", 1)
+        # curl prompts interactively for the password when it's omitted
+        # (e.g. -u "alice"); Scrapy can't do that, so it falls back to an
+        # empty password, same as an explicit -u "alice:" would.
+        user, _, password = parsed_args.auth.partition(":")
         headers.append(("Authorization", basic_auth_header(user, password)))
 
     return headers, cookies
@@ -103,7 +119,7 @@ def curl_to_request_kwargs(
 
     curl_args = split(curl_command)
 
-    if curl_args[0] != "curl":
+    if not curl_args or curl_args[0] != "curl":
         raise ValueError('A curl command must start with "curl"')
 
     parsed_args, argv = curl_parser.parse_known_args(curl_args[1:])
