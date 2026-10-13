@@ -29,7 +29,15 @@ def url_is_from_any_domain(url: UrlT, domains: Iterable[str]) -> bool:
 
 def _spider_domains(spider: type[Spider]) -> Iterable[str]:
     yield spider.name
-    if allowed_domains := getattr(spider, "allowed_domains", None):
+    allowed_domains = getattr(spider, "allowed_domains", None)
+    if isinstance(allowed_domains, property):
+        # allowed_domains defined as a property is only evaluable on an
+        # instance, not on the class: url_is_from_spider() is only ever
+        # given the class (e.g. during spider loading, before any spider
+        # instance exists), so there is no instance to evaluate it against.
+        # Fall back to just the spider name rather than crashing.
+        return
+    if allowed_domains:
         yield from allowed_domains
 
 
