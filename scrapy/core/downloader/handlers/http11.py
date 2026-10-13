@@ -472,6 +472,11 @@ class _ScrapyAgent:
         headers = TxHeaders(request.headers)
         if isinstance(agent, _TunnelingAgent):
             headers.removeHeader(b"Proxy-Authorization")
+        # Twisted sets its own Content-Length header based on the body
+        # producer's length; an explicit one in request.headers would
+        # otherwise end up duplicated on the wire, which malformed the
+        # request and made some servers reject it with a 400 response.
+        headers.removeHeader(b"Content-Length")
         bodyproducer = _RequestBodyProducer(request.body) if request.body else None
         start_time = monotonic()
         d: Deferred[IResponse] = agent.request(
