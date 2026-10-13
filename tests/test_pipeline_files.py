@@ -6,7 +6,7 @@ import random
 import re
 import time
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from ftplib import FTP
 from io import BytesIO
 from pathlib import Path
@@ -953,6 +953,50 @@ class TestS3FilesStore:
 
             stub.assert_no_pending_responses()
 
+    @inline_callbacks_test
+    def test_stat_does_not_use_local_timezone(self):
+        """Regression test for
+        https://github.com/scrapy/scrapy/issues/8186: S3's LastModified is
+        a tz-aware (UTC) datetime; time.mktime(.timetuple()) discards the
+        tzinfo and reinterprets the fields as local time, shifting the
+        result by the local UTC offset depending on the machine's
+        timezone. Asserting that time.mktime isn't called at all, rather
+        than comparing the resulting timestamp, keeps this test's outcome
+        independent of the timezone it happens to run in."""
+        bucket = "mybucket"
+        key = "export.csv"
+        uri = f"s3://{bucket}/{key}"
+        checksum = "3187896a9657a28163abb31667df64c8"
+        last_modified = datetime(2019, 12, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+        store = S3FilesStore(uri)
+        from botocore.stub import Stubber  # noqa: PLC0415
+
+        with (
+            Stubber(store.s3_client) as stub,
+            mock.patch("scrapy.pipelines.files.time.mktime") as mocked_mktime,
+        ):
+            stub.add_response(
+                "head_object",
+                expected_params={
+                    "Bucket": bucket,
+                    "Key": key,
+                },
+                service_response={
+                    "ETag": f'"{checksum}"',
+                    "LastModified": last_modified,
+                },
+            )
+
+            file_stats = yield store.stat_file("", info=DUMMY_SPIDER_INFO)
+            assert file_stats == {
+                "checksum": checksum,
+                "last_modified": last_modified.timestamp(),
+            }
+            mocked_mktime.assert_not_called()
+
+            stub.assert_no_pending_responses()
+
     def test_default_max_pool_connections(self) -> None:
         store = S3FilesStore("s3://mybucket/prefix/")
         config: Any = store.s3_client.meta.config
@@ -1096,6 +1140,29 @@ class TestGCSFilesStore:
         }
 
     @coroutine_test
+    async def test_stat_does_not_use_local_timezone(self) -> None:
+        """Regression test for
+        https://github.com/scrapy/scrapy/issues/8186: blob.updated is a
+        tz-aware (UTC) datetime in real GCS responses; see the equivalent
+        S3FilesStore test for why time.mktime must not be used at all."""
+        store, bucket, blob = self.build_gcs_files_store()
+        checksum = "cdcda85605e46d0af6110752770dce3c"
+        blob.md5_hash = base64.b64encode(bytes.fromhex(checksum)).decode()
+        updated = datetime(2019, 12, 1, 10, 0, 0, tzinfo=timezone.utc)
+        blob.updated = updated
+        bucket.get_blob.return_value = blob
+        with mock.patch("scrapy.pipelines.files.time.mktime") as mocked_mktime:
+            stat = await maybe_deferred_to_future(
+                store.stat_file("full/filename", info=DUMMY_SPIDER_INFO)
+            )
+            mocked_mktime.assert_not_called()
+        bucket.get_blob.assert_called_once_with("my_prefix/full/filename")
+        assert stat == {
+            "checksum": checksum,
+            "last_modified": updated.timestamp(),
+        }
+
+    @coroutine_test
     async def test_stat_missing_blob(self) -> None:
         store, bucket, _ = self.build_gcs_files_store()
         bucket.get_blob.return_value = None
@@ -1141,6 +1208,12 @@ class TestFTPFileStore:
             )
             stat = yield store.stat_file(path, info=DUMMY_SPIDER_INFO)
             assert "last_modified" in stat
+            # Regression test for https://github.com/scrapy/scrapy/issues/8186:
+            # the file was just uploaded, so its MDTM-reported last_modified
+            # should be a real, current Unix timestamp, not the nonsensical
+            # number float() produces when given MDTM's raw
+            # "YYYYMMDDHHMMSS" response.
+            assert stat["last_modified"] == pytest.approx(time.time(), abs=60)
             assert "checksum" in stat
             assert stat["checksum"] == "d113d66b2ec7258724a268bd88eef6b6"
             path = f"{store.basedir}/{path}"

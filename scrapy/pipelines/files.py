@@ -15,6 +15,7 @@ import time
 import warnings
 from collections import defaultdict
 from contextlib import suppress
+from datetime import datetime, timezone
 from ftplib import FTP
 from io import BytesIO
 from pathlib import Path
@@ -202,7 +203,12 @@ class S3FilesStore:
     def _onsuccess(boto_key: dict[str, Any]) -> StatInfo:
         checksum = boto_key["ETag"].strip('"')
         last_modified = boto_key["LastModified"]
-        modified_stamp = time.mktime(last_modified.timetuple())
+        # LastModified is a tz-aware datetime (UTC); .timetuple() discards
+        # the tzinfo, so time.mktime() would reinterpret those fields as
+        # local time, shifting the result by the local UTC offset.
+        # .timestamp() uses the tzinfo and is correct regardless of the
+        # machine's local timezone.
+        modified_stamp = last_modified.timestamp()
         return {"checksum": checksum, "last_modified": modified_stamp}
 
     def stat_file(
@@ -326,7 +332,10 @@ class GCSFilesStore:
     def _onsuccess(blob: Any) -> StatInfo:
         if blob:
             checksum = base64.b64decode(blob.md5_hash).hex()
-            last_modified = time.mktime(blob.updated.timetuple())
+            # blob.updated is a tz-aware datetime (UTC); see the comment on
+            # S3FilesStore._onsuccess for why .timestamp() is used instead
+            # of time.mktime(.timetuple()).
+            last_modified = blob.updated.timestamp()
             return {"checksum": checksum, "last_modified": last_modified}
         return {}
 
@@ -420,7 +429,16 @@ class FTPFilesStore:
                 if self.USE_ACTIVE_MODE:
                     ftp.set_pasv(False)
                 file_path = f"{self.basedir}/{path}"
-                last_modified = float(ftp.voidcmd(f"MDTM {file_path}")[4:].strip())
+                mdtm_response = ftp.voidcmd(f"MDTM {file_path}")[4:].strip()
+                # MDTM (RFC 3659) returns "YYYYMMDDHHMMSS[.sss]" in UTC, not
+                # a Unix timestamp: float(mdtm_response) would parse it as
+                # a huge nonsensical number instead. Parse the timestamp
+                # explicitly as UTC to get the actual epoch seconds.
+                last_modified = (
+                    datetime.strptime(mdtm_response[:14], "%Y%m%d%H%M%S")
+                    .replace(tzinfo=timezone.utc)
+                    .timestamp()
+                )
                 m = hashlib.md5()  # noqa: S324
                 ftp.retrbinary(f"RETR {file_path}", m.update)
             return {"last_modified": last_modified, "checksum": m.hexdigest()}
