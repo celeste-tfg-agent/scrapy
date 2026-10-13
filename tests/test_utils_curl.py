@@ -30,6 +30,52 @@ class TestCurlToRequestKwargs:
         expected_result = {"method": "GET", "url": "http://www.example.org"}
         self._test_command(curl_command, expected_result)
 
+    def test_empty_command_raises_clear_error(self):
+        """Regression test for https://github.com/scrapy/scrapy/issues/8131:
+        an empty command used to raise an opaque IndexError."""
+        with pytest.raises(ValueError, match='curl command must start with "curl"'):
+            curl_to_request_kwargs("")
+
+    def test_header_without_colon_is_omitted(self):
+        """Regression test for https://github.com/scrapy/scrapy/issues/8131:
+        a header with no colon (curl silently drops it instead of sending
+        it) used to raise an opaque ValueError."""
+        curl_command = 'curl "http://example.org/" -H "X-Flag"'
+        expected_result = {"method": "GET", "url": "http://example.org/"}
+        self._test_command(curl_command, expected_result)
+
+    def test_header_with_trailing_semicolon_sends_empty_value(self):
+        """curl's syntax for a header sent with an empty value."""
+        curl_command = 'curl "http://example.org/" -H "X-Flag;"'
+        expected_result = {
+            "method": "GET",
+            "url": "http://example.org/",
+            "headers": [("X-Flag", "")],
+        }
+        self._test_command(curl_command, expected_result)
+
+    def test_header_with_extra_text_after_semicolon_is_omitted(self):
+        curl_command = 'curl "http://example.org/" -H "X-Flag;extra"'
+        expected_result = {"method": "GET", "url": "http://example.org/"}
+        self._test_command(curl_command, expected_result)
+
+    def test_header_lone_semicolon_is_omitted(self):
+        curl_command = 'curl "http://example.org/" -H ";"'
+        expected_result = {"method": "GET", "url": "http://example.org/"}
+        self._test_command(curl_command, expected_result)
+
+    def test_basic_auth_without_password(self):
+        """Regression test for https://github.com/scrapy/scrapy/issues/8131:
+        curl prompts interactively for the missing password; Scrapy can't,
+        so it falls back to an empty one instead of raising a ValueError."""
+        curl_command = 'curl "https://api.test.com/" -u "alice"'
+        expected_result = {
+            "method": "GET",
+            "url": "https://api.test.com/",
+            "headers": [("Authorization", basic_auth_header("alice", ""))],
+        }
+        self._test_command(curl_command, expected_result)
+
     def test_get_basic_auth(self):
         curl_command = 'curl "https://api.test.com/" -u "some_username:some_password"'
         expected_result = {
