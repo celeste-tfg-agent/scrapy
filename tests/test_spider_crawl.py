@@ -55,6 +55,38 @@ class TestCrawlSpider(TestSpiderBase):
             "http://example.org/nofollow.html",
         ]
 
+    def test_rule_priority(self):
+        """Regression test for https://github.com/scrapy/scrapy/issues/3613:
+        Rule had no way to set the priority of the requests it generates."""
+        response = HtmlResponse(
+            "http://example.org/somepage/index.html", body=self.test_body
+        )
+
+        class _CrawlSpider(self.spider_class):  # type: ignore[name-defined,misc]
+            name = "test"
+            allowed_domains = ["example.org"]
+            rules = (Rule(LinkExtractor(), priority=10),)
+
+        spider = _CrawlSpider()
+        output = list(spider._requests_to_follow(response))
+        assert len(output) == 3
+        assert all(r.priority == 10 for r in output)
+
+    def test_rule_priority_default(self):
+        response = HtmlResponse(
+            "http://example.org/somepage/index.html", body=self.test_body
+        )
+
+        class _CrawlSpider(self.spider_class):  # type: ignore[name-defined,misc]
+            name = "test"
+            allowed_domains = ["example.org"]
+            rules = (Rule(LinkExtractor()),)
+
+        spider = _CrawlSpider()
+        output = list(spider._requests_to_follow(response))
+        assert len(output) == 3
+        assert all(r.priority == 0 for r in output)
+
     def test_process_links(self):
         response = HtmlResponse(
             "http://example.org/somepage/index.html", body=self.test_body
