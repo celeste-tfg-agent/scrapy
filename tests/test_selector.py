@@ -167,7 +167,10 @@ class TestJMESPath:
         )
         assert resp.jmespath("html").xpath("//div/a/text()").getall() == ["a", "b", "d"]
         assert resp.jmespath("html").css("div > b").getall() == ["<b>f</b>"]
-        assert resp.jmespath("content").jmespath("name.age").get() == "18"
+        # The nested selector (created internally, with neither a response
+        # nor text) must preserve the real type of the value instead of
+        # stringifying it, per https://github.com/scrapy/scrapy/issues/8038.
+        assert resp.jmespath("content").jmespath("name.age").get() == 18
 
     def test_html_has_json(self) -> None:
         body = """
@@ -212,7 +215,9 @@ class TestJMESPath:
             "C",
             "D",
         ]
-        assert resp.xpath("//div/content").jmespath("total").get() == "4"
+        # See the equivalent assertion in test_json_has_html for why this is
+        # the real int, not the string "4".
+        assert resp.xpath("//div/content").jmespath("total").get() == 4
 
     def test_jmestpath_with_re(self) -> None:
         body = """
@@ -265,6 +270,41 @@ class TestJMESPath:
         assert resp.xpath("//div/content").jmespath("user[*].age.to_string(@)").re(
             r"(\d+)"
         ) == ["18", "32", "22", "25"]
+
+    def test_nested_jmespath_preserves_value_type(self) -> None:
+        """Regression test for https://github.com/scrapy/scrapy/issues/8038:
+        a selector with no response (e.g. a nested one created internally
+        while chaining .jmespath()) had its type forced to "html", which
+        made jmespath coerce non-string JSON values (e.g. booleans) to
+        strings instead of returning them as-is.
+
+        Uses a JSON body wrapped in HTML, like test_html_has_json, rather
+        than Selector(text=<json>) directly: the latter forces type="html"
+        too (the documented, unchanged behavior for that entry point), so
+        it does not exercise the nested, responseless selector this fix is
+        about.
+        """
+        body = """
+        <div>
+            <content>{"f": false, "n": 1, "s": "text"}</content>
+        </div>
+        """
+        resp = TextResponse(url="http://example.com", body=body, encoding="utf-8")
+        nested = resp.xpath("//div/content/text()")
+        assert nested.jmespath("f").get() is False
+        assert nested.jmespath("n").get() == 1
+        assert nested.jmespath("s").get() == "text"
+
+        # Also two levels deep, as in the original report (a jmespath()
+        # result chained into another jmespath()).
+        body = """
+        <div>
+            <content>{"outer": {"f": false}}</content>
+        </div>
+        """
+        resp = TextResponse(url="http://example.com", body=body, encoding="utf-8")
+        nested_twice = resp.xpath("//div/content/text()").jmespath("outer")
+        assert nested_twice.jmespath("f").get() is False
 
 
 @pytest.mark.skipif(PARSEL_SUPPORTS_JMESPATH, reason="parsel >= 1.8 supports jmespath")
