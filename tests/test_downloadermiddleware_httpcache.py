@@ -628,6 +628,57 @@ class RFC2616PolicyTestMixin(PolicyTestMixin):
             self.assertEqualResponse(res1, res2)
             assert "cached" in res2.flags
 
+    def test_revalidation_refreshes_cached_response(self):
+        # Regression test for the RFC2616Policy revalidation bug: once a
+        # cached response with a max-age is stale and gets successfully
+        # revalidated (304 Not Modified), the middleware must refresh the
+        # stored response's headers (particularly "Date", which drives the
+        # freshness/age computations) and persist that refresh. Otherwise,
+        # the cached response keeps aging against its original (now old)
+        # Date header, so the very next request for the same resource is
+        # considered stale again and triggers a new revalidation - even
+        # though the server just confirmed the response was still good for
+        # another max-age seconds. This defeats the purpose of max-age
+        # after the first revalidation.
+        headers = {"Date": self.yesterday, "Cache-Control": "max-age=60"}
+        with self._middleware() as mw:
+            req0 = Request("http://example.com")
+            res0 = Response(req0.url, status=200, headers=headers)
+
+            # Store the initial response: it is already a day old with a
+            # 60 second max-age, so it is stale from the start.
+            res1 = self._process_requestresponse(mw, req0, res0)
+            self.assertEqualResponse(res1, res0)
+            assert "cached" not in res1.flags
+
+            # The stale cached response cannot be served directly; the
+            # middleware must go on to validate it against the origin.
+            assert mw.process_request(req0) is None
+
+            # The origin server confirms the response is still valid and
+            # reports a fresh Date, as any well-behaved server would.
+            res0_304 = res0.replace(
+                status=304,
+                headers={"Date": self.today, "Cache-Control": "max-age=60"},
+            )
+            res2 = mw.process_response(req0, res0_304)
+            assert isinstance(res2, Response)
+            assert res2.status == 200
+            assert res2.headers[b"Date"] == self.today.encode()
+            assert "cached" in res2.flags
+            assert mw.stats.get_value("httpcache/revalidate") == 1
+
+            # Crucially, the very next request for the same resource must
+            # now be served straight from cache (it is fresh again, per
+            # the refreshed Date and the still-applicable max-age=60),
+            # instead of triggering yet another revalidation.
+            res3 = mw.process_request(req0)
+            assert isinstance(res3, Response)
+            assert res3.status == 200
+            assert res3.headers[b"Date"] == self.today.encode()
+            assert "cached" in res3.flags
+            assert mw.stats.get_value("httpcache/hit") == 1
+
     def test_process_exception(self):
         with self._middleware() as mw:
             res0 = Response(self.request.url, headers={"Expires": self.yesterday})

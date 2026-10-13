@@ -139,6 +139,21 @@ class HttpCacheMiddleware:
 
         if self.policy.is_cached_response_valid(cachedresponse, response, request):
             self.stats.inc_value("httpcache/revalidate")
+            if response.status == 304:
+                # The origin server confirmed the cached response is still
+                # valid (RFC 7234, Section 4.3.3). Per RFC 7234, Section
+                # 4.3.4, the stored response's headers must be refreshed
+                # with the ones from this 304 response (most importantly
+                # "Date", which the freshness/age calculations rely on),
+                # and the refreshed response must replace the stored one,
+                # otherwise the cached response keeps "aging" against its
+                # original (now stale) "Date" header and every subsequent
+                # request ends up being revalidated again, defeating
+                # "max-age" after the first revalidation.
+                cachedresponse = self._refresh_cached_response(
+                    cachedresponse, response
+                )
+                self._cache_response(cachedresponse, request)
             return cachedresponse
 
         self.stats.inc_value("httpcache/invalidate")
@@ -156,6 +171,34 @@ class HttpCacheMiddleware:
             self.stats.inc_value("httpcache/errorrecovery")
             return cachedresponse
         return None
+
+    def _refresh_cached_response(
+        self, cachedresponse: Response, response: Response
+    ) -> Response:
+        """Return a copy of *cachedresponse* whose headers have been
+        updated with those of *response*, a 304 (Not Modified)
+        revalidation response for it, as required by RFC 7234, Section
+        4.3.4.
+        """
+        headers = cachedresponse.headers.copy()
+        for key, value in response.headers.items():
+            headers[key] = value
+
+        # RFC 7234, Section 4.3.4 also requires 1xx warnings to be
+        # removed from the stored response on a successful revalidation,
+        # while 2xx warnings must be kept as is.
+        if b"Warning" in headers:
+            warnings = [
+                warning
+                for warning in headers.getlist(b"Warning")
+                if not warning.lstrip().startswith(b"1")
+            ]
+            if warnings:
+                headers.setlist(b"Warning", warnings)
+            else:
+                del headers[b"Warning"]
+
+        return cachedresponse.replace(headers=headers)
 
     def _cache_response(self, response: Response, request: Request) -> None:
         if self.policy.should_cache_response(response, request):
